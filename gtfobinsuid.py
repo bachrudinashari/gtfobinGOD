@@ -690,7 +690,7 @@ def run_auto(args):
         print(c(BOLD, "\n[*] Running sudo -l check..."))
     try:
         out = subprocess.run(
-            ["sudo", "-l"],
+            ["sudo", "-n", "-l"],
             capture_output=True, text=True, timeout=10
         )
         text = out.stdout
