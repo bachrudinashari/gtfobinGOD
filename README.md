@@ -8,9 +8,13 @@ Automatically identifies exploitable SUID binaries, sudo permissions, and Linux 
 
 ```bash
 # Install
-git clone https://github.com/bachrudinashari/gtfobinGOD.git /opt/god
-cd /opt/god && pip3 install -r requirements.txt
-chmod +x god && ln -s /opt/god/god /usr/local/bin/god
+sudo git clone https://github.com/bachrudinashari/gtfobinGOD.git /opt/god
+cd /opt/god
+sudo chmod +x god
+sudo ln -s /opt/god/god /usr/local/bin/god
+
+# Dependencies (Kali usually has these pre-installed):
+sudo apt install python3-requests python3-bs4 -y
 
 # Usage — just type:
 god              # run ALL checks (SUID + sudo + capabilities)
@@ -39,9 +43,14 @@ god update       # update database from GTFOBins
 ### Ubuntu / Kali Linux
 
 ```bash
-git clone https://github.com/bachrudinashari/gtfobinGOD.git
-cd gtfobinGOD
-pip3 install -r requirements.txt
+sudo git clone https://github.com/bachrudinashari/gtfobinGOD.git /opt/god
+sudo chmod +x /opt/god/god
+sudo ln -s /opt/god/god /usr/local/bin/god
+
+# Dependencies (choose one):
+sudo apt install python3-requests python3-bs4 -y          # recommended for Kali
+# OR
+pip3 install -r requirements.txt --break-system-packages  # alternative
 ```
 
 ### Windows (for exam preparation)
