@@ -656,6 +656,100 @@ def process_capabilities(cap_binaries, exam_mode=False):
 
 
 # ============================================================================
+# AUTO-RUN MODE
+# ============================================================================
+
+def run_auto(args):
+    """Auto-run SUID + sudo + capabilities checks."""
+    import subprocess
+
+    all_results = []
+    nonstandard_paths = set()
+
+    # 1. SUID
+    if not args.exam:
+        print(c(BOLD, "\n[*] Running SUID check..."))
+    try:
+        out = subprocess.run(
+            ["find", "/", "-perm", "-u=s", "-type", "f"],
+            capture_output=True, text=True, timeout=30
+        )
+        text = out.stdout
+        if text.strip():
+            names, nsp = extract_basenames_suid(text)
+            nonstandard_paths.update(nsp)
+            if names:
+                results = process_suid(names, nsp, False, args.db, args.exam)
+                all_results.extend(results)
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+        if not args.exam:
+            print(f"  [!] SUID check failed: {e}")
+
+    # 2. Sudo
+    if not args.exam:
+        print(c(BOLD, "\n[*] Running sudo -l check..."))
+    try:
+        out = subprocess.run(
+            ["sudo", "-l"],
+            capture_output=True, text=True, timeout=10
+        )
+        text = out.stdout
+        if text.strip():
+            binaries = extract_binaries_sudo(text)
+            if binaries:
+                results = process_sudo(binaries, args.exam)
+                all_results.extend(results)
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+        if not args.exam:
+            print(f"  [!] Sudo check failed: {e}")
+
+    # 3. Capabilities
+    if not args.exam:
+        print(c(BOLD, "\n[*] Running capabilities check..."))
+    try:
+        out = subprocess.run(
+            ["getcap", "-r", "/"],
+            capture_output=True, text=True, timeout=30
+        )
+        text = out.stdout + out.stderr  # getcap sometimes outputs to stderr
+        if text.strip():
+            cap_binaries = extract_binaries_capabilities(text)
+            if cap_binaries:
+                results = process_capabilities(cap_binaries, args.exam)
+                all_results.extend(results)
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+        if not args.exam:
+            print(f"  [!] Capabilities check failed: {e}")
+
+    # Output
+    if args.json:
+        json_results = []
+        for r in sorted(all_results, key=lambda x: x["priority"]):
+            json_results.append({
+                "binary": r["binary"],
+                "normalized": r["normalized"],
+                "mode": r["mode"],
+                "function": r["function"],
+                "priority": r["priority"],
+                "priority_label": PRIORITY_LABELS.get(r["priority"], "INFO"),
+                "command": r["command"],
+                "url": r.get("url"),
+            })
+        print(json.dumps(json_results, indent=2))
+    else:
+        if args.exam:
+            all_results = [r for r in all_results if r["priority"] <= 3]
+        print_results_sorted(all_results, args.exam)
+        print_nonstandard_paths_warning(nonstandard_paths)
+        if all_results:
+            shells = sum(1 for r in all_results if r["function"] == "shell")
+            reads = sum(1 for r in all_results if r["function"] == "file_read")
+            print(f"\n[*] Summary: {len(all_results)} findings | {shells} shells | {reads} file reads")
+
+    return 0 if all_results else 1
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -678,6 +772,8 @@ def main():
                            help="Parse sudo -l output instead of SUID enumeration")
     mode_group.add_argument("--capabilities", "--cap", dest="capabilities", action="store_true",
                            help="Parse getcap output instead of SUID enumeration")
+    mode_group.add_argument("--auto", action="store_true",
+                           help="Auto-run all 3 checks (SUID + sudo + capabilities). Default when no pipe.")
 
     # Source selection
     parser.add_argument("--online", action="store_true",
@@ -731,23 +827,9 @@ def main():
     if is_pipe():
         text = sys.stdin.read()
     else:
-        # Interactive mode (preserved from original)
-        if not args.exam:
-            sys.stdout.write("\nDo you want to see enumeration commands? (y/n): ")
-            sys.stdout.flush()
-            try:
-                response = input().strip().lower()
-            except EOFError:
-                response = "n"
-            if response in ('y', 'yes'):
-                print("\n[*] SUID/SGID Enumeration:")
-                print("  find / -perm -u=s -type f 2>/dev/null")
-                print("  find / -perm -g=s -type f 2>/dev/null")
-                print("\n[*] Sudo:")
-                print("  sudo -l")
-                print("\n[*] Capabilities:")
-                print("  getcap -r / 2>/dev/null")
-                print()
+        # No pipe: auto-run all checks (like the god wrapper but built-in)
+        if args.auto or (not args.sudo and not args.capabilities):
+            return run_auto(args)
 
         sys.stdout.write("Paste output (end with Ctrl-D on Linux, Ctrl-Z+Enter on Windows):\n")
         sys.stdout.flush()
