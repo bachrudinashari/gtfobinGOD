@@ -11,7 +11,6 @@ Automatically identifies exploitable SUID binaries, sudo permissions, and Linux 
 sudo git clone https://github.com/bachrudinashari/gtfobinGOD.git /opt/god
 cd /opt/god
 sudo chmod +x god
-sudo ln -s /opt/god/god /usr/local/bin/god
 
 # Dependencies (Kali usually has these pre-installed):
 sudo apt install python3-requests python3-bs4 -y
@@ -45,7 +44,6 @@ god update       # update database from GTFOBins
 ```bash
 sudo git clone https://github.com/bachrudinashari/gtfobinGOD.git /opt/god
 sudo chmod +x /opt/god/god
-sudo ln -s /opt/god/god /usr/local/bin/god
 
 # Dependencies (choose one):
 sudo apt install python3-requests python3-bs4 -y          # recommended for Kali
