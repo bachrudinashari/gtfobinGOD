@@ -4,6 +4,23 @@
 
 Automatically identifies exploitable SUID binaries, sudo permissions, and Linux capabilities — then provides **instant copy-paste exploit commands**. No more manually browsing GTFOBins during exams.
 
+## Quick Start
+
+```bash
+# Install
+git clone https://github.com/bachrudinashari/gtfobinGOD.git /opt/god
+cd /opt/god && pip3 install -r requirements.txt
+chmod +x god && ln -s /opt/god/god /usr/local/bin/god
+
+# Usage — just type:
+god              # run ALL checks (SUID + sudo + capabilities)
+god suid         # SUID binaries only
+god sudo         # sudo -l only
+god cap          # capabilities only
+god check vim    # quick check single binary
+god update       # update database from GTFOBins
+```
+
 ## Features
 
 - **279 binaries** with embedded exploit commands (offline, no internet needed)
