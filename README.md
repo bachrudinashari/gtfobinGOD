@@ -8,20 +8,16 @@ Automatically identifies exploitable SUID binaries, sudo permissions, and Linux 
 
 ```bash
 # Install
-sudo git clone https://github.com/bachrudinashari/gtfobinGOD.git /opt/god
-cd /opt/god
-sudo chmod +x god
+git clone https://github.com/bachrudinashari/gtfobinGOD.git
+cd gtfobinGOD
 
 # Dependencies (Kali usually has these pre-installed):
 sudo apt install python3-requests python3-bs4 -y
 
 # Usage — just type:
-god              # run ALL checks (SUID + sudo + capabilities)
-god suid         # SUID binaries only
-god sudo         # sudo -l only
-god cap          # capabilities only
-god check vim    # quick check single binary
-god update       # update database from GTFOBins
+python3 gtfobinsuid.py                # auto run ALL checks (SUID + sudo + cap)
+python3 gtfobinsuid.py --check vim    # quick check single binary
+python3 gtfobinsuid.py --update-db    # update database from GTFOBins
 ```
 
 ## Features
@@ -42,8 +38,8 @@ god update       # update database from GTFOBins
 ### Ubuntu / Kali Linux
 
 ```bash
-sudo git clone https://github.com/bachrudinashari/gtfobinGOD.git /opt/god
-sudo chmod +x /opt/god/god
+git clone https://github.com/bachrudinashari/gtfobinGOD.git
+cd gtfobinGOD
 
 # Dependencies (choose one):
 sudo apt install python3-requests python3-bs4 -y          # recommended for Kali
